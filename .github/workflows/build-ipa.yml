@@ -1,0 +1,70 @@
+name: Compilar IPA de UniTrack
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - 'UniTrack/**'
+      - 'UniTrack.xcodeproj/**'
+      - '.github/workflows/build-ipa.yml'
+      - 'UniTrack-iOS.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Localizar el proyecto
+        shell: bash
+        run: |
+          set -euo pipefail
+          project_root="$GITHUB_WORKSPACE"
+          if [[ ! -f "$project_root/UniTrack.xcodeproj/project.pbxproj" ]]; then
+            archive="$GITHUB_WORKSPACE/UniTrack-iOS.zip"
+            test -f "$archive"
+            project_root="$RUNNER_TEMP/unitrack-source"
+            mkdir -p "$project_root"
+            ditto -x -k "$archive" "$project_root"
+          fi
+          test -f "$project_root/UniTrack.xcodeproj/project.pbxproj"
+          printf 'UNITRACK_PROJECT_ROOT=%s\n' "$project_root" >> "$GITHUB_ENV"
+
+      - name: Compilar para iPhone
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcodebuild \
+            -project "$UNITRACK_PROJECT_ROOT/UniTrack.xcodeproj" \
+            -target UniTrack -configuration Release -sdk iphoneos \
+            "SYMROOT=$RUNNER_TEMP/unitrack-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+
+      - name: Empaquetar IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/unitrack-build/Release-iphoneos/UniTrack.app"
+          test -x "$app/UniTrack"
+          test -f "$app/Info.plist"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" "$GITHUB_WORKSPACE/artifacts"
+          ditto "$app" "$RUNNER_TEMP/ipa/Payload/UniTrack.app"
+          (
+            cd "$RUNNER_TEMP/ipa"
+            /usr/bin/zip -qry "$GITHUB_WORKSPACE/artifacts/UniTrack.ipa" Payload
+          )
+          /usr/bin/unzip -tq "$GITHUB_WORKSPACE/artifacts/UniTrack.ipa"
+
+      - name: Publicar IPA como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: UniTrack-iOS
+          path: artifacts/UniTrack.ipa
+          if-no-files-found: error
